@@ -18,9 +18,12 @@ from .collector_v2 import load_data_v2
 
 
 class SnakeDatasetV2(Dataset):
-    """Dataset of Snake transitions in structured coordinate format."""
+    """Dataset of Snake transitions in structured coordinate format.
 
-    def __init__(self, data: dict):
+    Supports noise injection on input coordinates for autoregressive robustness.
+    """
+
+    def __init__(self, data: dict, noise_std: float = 0.0):
         self.head = torch.from_numpy(data["head"])
         self.direction = torch.from_numpy(data["direction"])
         self.action = torch.from_numpy(data["action"])
@@ -34,19 +37,21 @@ class SnakeDatasetV2(Dataset):
         self.next_game_over = torch.from_numpy(data["next_game_over"])
         self.ate_food = torch.from_numpy(data["ate_food"])
         self.next_body = torch.from_numpy(data["next_body"])
+        self.noise_std = noise_std
 
     def __len__(self):
         return len(self.head)
 
     def __getitem__(self, idx):
-        return {
-            "head": self.head[idx],
-            "direction": self.direction[idx],
-            "action": self.action[idx],
-            "food": self.food[idx],
-            "game_over": self.game_over[idx],
-            "body": self.body[idx],
-            "body_mask": self.body_mask[idx],
+        # Fetch raw data
+        item = {
+            "head": self.head[idx].clone(),
+            "direction": self.direction[idx].clone(),
+            "action": self.action[idx].clone(),
+            "food": self.food[idx].clone(),
+            "game_over": self.game_over[idx].clone(),
+            "body": self.body[idx].clone(),
+            "body_mask": self.body_mask[idx].clone(),
             "next_head": self.next_head[idx],
             "next_food": self.next_food[idx],
             "next_direction": self.next_direction[idx],
@@ -54,6 +59,22 @@ class SnakeDatasetV2(Dataset):
             "ate_food": self.ate_food[idx],
             "next_body": self.next_body[idx],
         }
+
+        # Inject noise on inputs for autoregressive robustness
+        if self.noise_std > 0:
+            # Noise head position
+            item["head"] += torch.randn_like(item["head"]) * self.noise_std
+            # Noise food position
+            item["food"] += torch.randn_like(item["food"]) * self.noise_std
+            # Noise body segments (only valid ones — zero-noise on padding)
+            body_noise = torch.randn_like(item["body"]) * self.noise_std
+            item["body"] += body_noise * item["body_mask"].unsqueeze(-1)
+            # Clip to valid range [0, 1]
+            item["head"] = item["head"].clamp(0, 1)
+            item["food"] = item["food"].clamp(0, 1)
+            item["body"] = item["body"].clamp(0, 1)
+
+        return item
 
 
 def train_v2(
@@ -63,6 +84,7 @@ def train_v2(
     epochs: int = 30,
     learning_rate: float = 3e-4,
     weight_decay: float = 1e-5,
+    noise_std: float = 0.015,  # ~0.15 cells on 10x10 grid
     val_split: float = 0.1,
     device: str = "auto",
     seed: int = 42,
@@ -82,7 +104,7 @@ def train_v2(
     # Load data
     print(f"Loading data from {data_path}...")
     data = load_data_v2(data_path)
-    dataset = SnakeDatasetV2(data)
+    dataset = SnakeDatasetV2(data, noise_std=noise_std)
 
     n_total = len(dataset)
     n_val = int(n_total * val_split)
@@ -253,6 +275,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--noise-std", type=float, default=0.015, help="Input noise std for robustness")
     parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -264,6 +287,7 @@ def main():
         epochs=args.epochs,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
+        noise_std=args.noise_std,
         val_split=args.val_split,
         device=args.device,
         seed=args.seed,
