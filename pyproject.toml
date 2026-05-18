@@ -1,0 +1,27 @@
+[project]
+name = "snnake"
+version = "0.1.0"
+description = "A neural network that simulates the Snake game environment — the NN is the game engine."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "tqdm>=4.65",
+    "tensorboard>=2.12",
+]
+
+[project.scripts]
+snnake-collect = "snnake.collector:main"
+snnake-train = "snnake.train:main"
+snnake-play = "snnake.play:main"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

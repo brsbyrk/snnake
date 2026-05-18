@@ -1,0 +1,12 @@
+# sNNake — data, checkpoints, and build artifacts
+data/
+checkpoints/
+*.egg-info/
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+dist/
+build/
+*.egg
