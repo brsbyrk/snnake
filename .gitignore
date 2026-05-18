@@ -1,6 +1,7 @@
 # sNNake — data, checkpoints, and build artifacts
 data/
 checkpoints/
+checkpoints_v2/
 *.egg-info/
 __pycache__/
 *.pyc

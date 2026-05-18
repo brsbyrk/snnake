@@ -30,6 +30,7 @@ from .encoding import (
     DIRECTION_VECTORS, GRID_SIZE,
     encode_state, encode_action,
     index_from_direction,
+    apply_action, direction_from_index,
 )
 
 GRID = GRID_SIZE
@@ -61,15 +62,39 @@ def body_to_array(body, max_len: int = MAX_BODY_LEN) -> tuple:
     return arr, mask
 
 
+def _safe_actions(head_x: int, head_y: int, direction_idx: int) -> list[int]:
+    """Return action indices that don't cause immediate wall collision.
+
+    An action is safe if the resulting head position (after direction
+    update) is within bounds.
+    """
+    safe = []
+    for a in range(3):
+        new_dir_idx = apply_action(direction_idx, a)
+        dx, dy = direction_from_index(new_dir_idx)
+        nx, ny = head_x + dx, head_y + dy
+        if 0 <= nx < GRID and 0 <= ny < GRID:
+            safe.append(a)
+    return safe
+
+
 def collect_data_v2(
     num_episodes: int = 50000,
     max_steps_per_episode: int = 200,
     action_change_prob: float = 0.1,
+    edge_bias_prob: float = 0.0,
+    edge_margin: float = 1.0,
     max_body_len: int = MAX_BODY_LEN,
     seed: int | None = None,
     verbose: bool = True,
 ) -> dict:
-    """Collect training data in structured coordinate format."""
+    """Collect training data in structured coordinate format.
+
+    When edge_bias_prob > 0, when the head is within edge_margin cells
+    of a wall, bias action selection towards safe (non-collision) actions.
+    This oversamples "head at edge but no collision" transitions and helps
+    the model learn that edge proximity != automatic game over.
+    """
     rng = np.random.RandomState(seed)
     engine = SnakeEngine(seed=seed)
 
@@ -98,16 +123,24 @@ def collect_data_v2(
         state = engine.reset()
 
         for step in range(max_steps_per_episode):
-            # Sample action
-            if rng.random() < action_change_prob:
-                action_idx = int(rng.randint(0, 3))
-            else:
-                action_idx = 1  # straight
-
             # Current state
             hx, hy = state.body[0]
             fx, fy = state.food_pos
             dir_idx = state.direction_idx
+
+            # Sample action — with edge bias if near wall
+            is_near_wall = (hx < edge_margin or hx >= GRID - edge_margin
+                           or hy < edge_margin or hy >= GRID - edge_margin)
+            if is_near_wall and edge_bias_prob > 0 and rng.random() < edge_bias_prob:
+                safe = _safe_actions(hx, hy, dir_idx)
+                if safe:
+                    action_idx = int(rng.choice(safe))
+                else:
+                    action_idx = 1  # straight (will collide, but that's also a valid transition)
+            elif rng.random() < action_change_prob:
+                action_idx = int(rng.randint(0, 3))
+            else:
+                action_idx = 1  # straight
 
             head = normalize_coord(hx, hy)
             direction = np.eye(4, dtype=np.float32)[dir_idx]
@@ -189,6 +222,9 @@ def main():
     parser.add_argument("--episodes", type=int, default=50000, help="Number of episodes")
     parser.add_argument("--max-steps", type=int, default=200, help="Max steps per episode")
     parser.add_argument("--action-change-prob", type=float, default=0.1, help="Action change probability")
+    parser.add_argument("--edge-bias-prob", type=float, default=0.0,
+                        help="Oversample safe actions near walls [0.0-1.0]")
+    parser.add_argument("--edge-margin", type=float, default=1.0, help="Cells from wall to consider 'near edge'")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--output", type=str, default="data/games_v2.npz", help="Output path")
     args = parser.parse_args()
@@ -197,6 +233,8 @@ def main():
         num_episodes=args.episodes,
         max_steps_per_episode=args.max_steps,
         action_change_prob=args.action_change_prob,
+        edge_bias_prob=args.edge_bias_prob,
+        edge_margin=args.edge_margin,
         seed=args.seed,
     )
     save_data_v2(data, args.output)

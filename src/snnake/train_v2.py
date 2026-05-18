@@ -144,7 +144,7 @@ def train_v2(
             losses = compute_loss(
                 nh_pred, nf_pred, ate_logits, go_logits, nd_logits, nb_pred,
                 next_head, next_food, ate, next_go, next_dir.argmax(dim=1), next_body,
-                body_mask,
+                body_mask, head_positions=head,
             )
             losses["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -183,7 +183,7 @@ def train_v2(
                 losses = compute_loss(
                     nh_pred, nf_pred, ate_logits, go_logits, nd_logits, nb_pred,
                     next_head, next_food, ate, next_go, next_dir.argmax(dim=1), next_body,
-                    body_mask,
+                    body_mask, head_positions=head,
                 )
                 accs = accuracy_metrics(
                     nh_pred, nf_pred, ate_logits, go_logits, nb_pred,

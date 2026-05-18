@@ -13,6 +13,7 @@ import torch.nn.functional as F
 # Max body length for fixed-size batching (10x10 board → 100 max, but games
 # practically end before 30 segments. 40 is a safe upper bound.)
 MAX_BODY_LEN = 40
+GRID_SIZE = 10
 
 # Input dimensions
 HEAD_DIM = 2
@@ -235,10 +236,42 @@ class StructuredWorldModel(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
+def compute_game_over_weight(
+    head_positions: torch.Tensor,  # (B, 2) normalized [0,1]
+    target_go: torch.Tensor,       # (B, 1) binary
+    grid_size: int = GRID_SIZE,
+    edge_margin: float = 1.0,      # cells from wall
+    false_pos_weight: float = 3.0,  # multiplier for false positives near wall
+) -> torch.Tensor:
+    """Per-sample weight for game_over loss.
+
+    Penalizes false positives (predicting GO when not) near walls.
+    The model learns 'edge=x=9→GO' because most edge transitions in
+    random play end in collision. This reweights the rare safe ones.
+    """
+    # Convert normalized coords to grid coords
+    hx = head_positions[:, 0] * (grid_size - 1)
+    hy = head_positions[:, 1] * (grid_size - 1)
+
+    # Distance to nearest wall in grid cells
+    dist_to_wall = torch.min(torch.stack([
+        hx, hy,
+        (grid_size - 1) - hx,
+        (grid_size - 1) - hy,
+    ], dim=0), dim=0).values  # (B,)
+
+    # Near wall AND actual outcome is NOT game over
+    near_wall = (dist_to_wall < edge_margin).float()
+    not_go = (1.0 - target_go.view(-1).float())
+    weight = 1.0 + false_pos_weight * near_wall * not_go
+    return weight
+
+
 def compute_loss(
     next_head, next_food, ate_logits, go_logits, next_dir_logits, new_body_pred,
     target_head, target_food, target_ate, target_go, target_dir, target_body,
     body_mask,
+    head_positions=None,  # (B, 2) for weighted GO loss — pass input head from batch
     lambda_head=1.0, lambda_food=0.5, lambda_ate=0.5, lambda_go=0.5,
     lambda_body=1.0,
 ):
@@ -248,6 +281,7 @@ def compute_loss(
         target_dir: (B,) integer class indices
         target_body: (B, L, 2) target body positions
         target_ate: (B,) binary (0 or 1)
+        head_positions: input head positions for weighted GO loss
     """
     # Head position: MSE
     head_loss = F.mse_loss(next_head, target_head)
@@ -260,9 +294,11 @@ def compute_loss(
         ate_logits.view(-1), target_ate.view(-1).float()
     )
 
-    # Game over: BCE
+    # Game over: BCE with per-sample weighting
+    # Penalize false positives near walls to break the 'edge=GO' shortcut
     go_loss = F.binary_cross_entropy_with_logits(
-        go_logits.view(-1), target_go.view(-1).float()
+        go_logits.view(-1), target_go.view(-1).float(),
+        weight=compute_game_over_weight(target_head, target_go),
     )
 
     # Direction: CE (should be near-perfect since it's derived)
