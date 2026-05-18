@@ -123,13 +123,14 @@ class WorldModel(nn.Module):
         """
         from .encoding import encode_action
 
+        device = next(self.parameters()).device
         action = encode_action(action_idx)
 
-        # Add batch dim
-        grid_b = torch.from_numpy(grid).unsqueeze(0)
-        dir_b = torch.from_numpy(direction).unsqueeze(0)
-        act_b = torch.from_numpy(action).unsqueeze(0)
-        go_b = torch.from_numpy(game_over).unsqueeze(0)
+        # Add batch dim and move to model's device
+        grid_b = torch.from_numpy(grid).unsqueeze(0).to(device)
+        dir_b = torch.from_numpy(direction).unsqueeze(0).to(device)
+        act_b = torch.from_numpy(action).unsqueeze(0).to(device)
+        go_b = torch.from_numpy(game_over).unsqueeze(0).to(device)
 
         with torch.no_grad():
             g_logits, d_logits, go_logits = self(grid_b, dir_b, act_b, go_b)

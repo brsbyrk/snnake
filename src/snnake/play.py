@@ -176,7 +176,7 @@ def main():
 
     # Load model
     print(f"Loading model from {args.checkpoint}...")
-    checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
+    checkpoint = torch.load(args.checkpoint, map_location=args.device)
     model = WorldModel()
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(args.device)
