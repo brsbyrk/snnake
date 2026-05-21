@@ -78,12 +78,81 @@ def _safe_actions(head_x: int, head_y: int, direction_idx: int) -> list[int]:
     return safe
 
 
+class HeuristicPlayer:
+    """Greedy food-seeking bot with obstacle avoidance.
+
+    Chooses actions that minimize Manhattan distance to food while
+    avoiding wall and self collisions. Injects 20% random exploration
+    for trajectory diversity.
+
+    For body length >= 4, uses 2-step lookahead to avoid tail-chasing:
+    penalizes actions that would trap the snake against its own body.
+    """
+
+    def __init__(self, rng: np.random.RandomState, grid_size: int = GRID):
+        self.rng = rng
+        self.grid_size = grid_size
+        self.greedy_prob = 0.80
+
+    def choose_action(self, state) -> int:
+        """Return action_idx [0,1,2] that moves toward food."""
+        head_x, head_y = state.body[0]
+        food_x, food_y = state.food_pos
+        dir_idx = state.direction_idx
+        body_set = set(state.body)
+
+        # Evaluate each action
+        candidates = []  # (action_idx, distance_to_food)
+        for a in range(3):
+            new_dir = apply_action(dir_idx, a)
+            dx, dy = direction_from_index(new_dir)
+            nx, ny = head_x + dx, head_y + dy
+
+            # Wall collision → skip
+            if nx < 0 or nx >= self.grid_size or ny < 0 or ny >= self.grid_size:
+                continue
+
+            # Immediate self collision → skip
+            if (nx, ny) in body_set:
+                continue
+
+            # Distance to food
+            dist = abs(nx - food_x) + abs(ny - food_y)
+
+            # 2-step lookahead for tail chasing (body >= 4)
+            if len(state.body) >= 4:
+                # Check if moving here would create a trap
+                next_dir2 = apply_action(new_dir, 1)  # assume straight next
+                dx2, dy2 = direction_from_index(next_dir2)
+                nx2, ny2 = nx + dx2, ny + dy2
+                # Project what the body would look like after this move
+                projected_body = [(nx, ny)] + state.body[:-1]
+                if (nx2, ny2) in set(projected_body):
+                    dist += 2  # penalty for setting up trap
+
+            candidates.append((a, dist))
+
+        if not candidates:
+            return 1  # all actions deadly — straight into the wall
+
+        # Sort by distance
+        candidates.sort(key=lambda x: x[1])
+
+        # Greedy vs exploration
+        if self.rng.random() < self.greedy_prob:
+            return candidates[0][0]
+        else:
+            safe_actions = [c[0] for c in candidates]
+            return self.rng.choice(safe_actions)
+
+
 def collect_data_v2(
     num_episodes: int = 50000,
     max_steps_per_episode: int = 200,
     action_change_prob: float = 0.1,
     edge_bias_prob: float = 0.0,
     edge_margin: float = 1.0,
+    strategy: str = "random",
     max_body_len: int = MAX_BODY_LEN,
     seed: int | None = None,
     verbose: bool = True,
@@ -94,9 +163,15 @@ def collect_data_v2(
     of a wall, bias action selection towards safe (non-collision) actions.
     This oversamples "head at edge but no collision" transitions and helps
     the model learn that edge proximity != automatic game over.
+
+    strategy: "random" uses the original random policy.
+              "heuristic" uses greedy food-seeking bot with exploration (80/20).
     """
     rng = np.random.RandomState(seed)
     engine = SnakeEngine(seed=seed)
+
+    # Initialize player for heuristic strategy
+    player = HeuristicPlayer(rng) if strategy == "heuristic" else None
 
     # Pre-allocate lists
     head_list = []
@@ -127,20 +202,24 @@ def collect_data_v2(
             hx, hy = state.body[0]
             fx, fy = state.food_pos
             dir_idx = state.direction_idx
-
-            # Sample action — with edge bias if near wall
-            is_near_wall = (hx < edge_margin or hx >= GRID - edge_margin
-                           or hy < edge_margin or hy >= GRID - edge_margin)
-            if is_near_wall and edge_bias_prob > 0 and rng.random() < edge_bias_prob:
-                safe = _safe_actions(hx, hy, dir_idx)
-                if safe:
-                    action_idx = int(rng.choice(safe))
-                else:
-                    action_idx = 1  # straight (will collide, but that's also a valid transition)
-            elif rng.random() < action_change_prob:
-                action_idx = int(rng.randint(0, 3))
+            # Sample action
+            if strategy == "heuristic" and player is not None:
+                action_idx = player.choose_action(state)
             else:
-                action_idx = 1  # straight
+                # Random strategy with edge bias
+                hx, hy = state.body[0]
+                is_near_wall = (hx < edge_margin or hx >= GRID - edge_margin
+                               or hy < edge_margin or hy >= GRID - edge_margin)
+                if is_near_wall and edge_bias_prob > 0 and rng.random() < edge_bias_prob:
+                    safe = _safe_actions(hx, hy, dir_idx)
+                    if safe:
+                        action_idx = int(rng.choice(safe))
+                    else:
+                        action_idx = 1
+                elif rng.random() < action_change_prob:
+                    action_idx = int(rng.randint(0, 3))
+                else:
+                    action_idx = 1  # straight
 
             head = normalize_coord(hx, hy)
             direction = np.eye(4, dtype=np.float32)[dir_idx]
@@ -225,6 +304,8 @@ def main():
     parser.add_argument("--edge-bias-prob", type=float, default=0.0,
                         help="Oversample safe actions near walls [0.0-1.0]")
     parser.add_argument("--edge-margin", type=float, default=1.0, help="Cells from wall to consider 'near edge'")
+    parser.add_argument("--strategy", type=str, default="random", choices=["random", "heuristic"],
+                        help="Policy for generating episodes: random or heuristic (greedy bot)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--output", type=str, default="data/games_v2.npz", help="Output path")
     args = parser.parse_args()
@@ -235,6 +316,7 @@ def main():
         action_change_prob=args.action_change_prob,
         edge_bias_prob=args.edge_bias_prob,
         edge_margin=args.edge_margin,
+        strategy=args.strategy,
         seed=args.seed,
     )
     save_data_v2(data, args.output)
