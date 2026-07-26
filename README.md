@@ -39,9 +39,9 @@ codebase but is not needed for gameplay — food spawns randomly on empty cells.
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Model | `src/snnake/model_v5.py` | 13.8K-param StructuredWorldModel |
-| Training | `src/snnake/train_v5.py` | Training loop (CUDA/MPS/CPU) |
-| Data collection | `src/snnake/collector_v2.py` | Generates training data from ground-truth engine |
+| Model | `src/snnake/model.py` | 13.8K-param StructuredWorldModel |
+| Training | `src/snnake/train.py` | Training loop (CUDA/MPS/CPU) |
+| Data collection | `src/snnake/collector.py` | Generates training data from ground-truth engine |
 | Ground truth engine | `src/snnake/engine.py` | Reference Snake implementation |
 | ONNX export | `export_onnx.py` | Exports direction MLP → 2.2 KB ONNX |
 | Web demo | `web/index.html` | Browser demo — the ONNX model plays Snake autonomously |
@@ -54,10 +54,10 @@ uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -e .
 
 # Generate training data
-python -m snnake.collector_v2 --episodes 5000 --output data/games_v3_combined.npz
+python -m snnake.collector --episodes 5000 --output data/games_v3_combined.npz
 
 # Train
-python -m snnake.train_v5 --data data/balanced_dir.npz --epochs 30 --lr 1e-3
+python -m snnake.train --data data/balanced_dir.npz --epochs 30 --lr 1e-3
 
 # Export ONNX
 python export_onnx.py

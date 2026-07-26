@@ -10,8 +10,8 @@ dependencies = [
 ]
 
 [project.scripts]
-snnake-collect = "snnake.collector_v2:main"
-snnake-train = "snnake.train_v5:main"
+snnake-collect = "snnake.collector:main"
+snnake-train = "snnake.train:main"
 
 [tool.pytest.ini_options]
 minversion = "7.0"

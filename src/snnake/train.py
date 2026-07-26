@@ -23,8 +23,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from .model_v5 import StructuredWorldModel, compute_v5_loss
-from .collector_v2 import load_data_v2
+from .model import StructuredWorldModel, compute_v5_loss
+from .collector import load_data_v2
 
 GRID_SIZE = 10
 NUM_CELLS = GRID_SIZE * GRID_SIZE

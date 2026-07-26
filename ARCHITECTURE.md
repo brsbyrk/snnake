@@ -73,5 +73,5 @@ No server needed — pure client-side inference.
 
 ## Training Data
 
-Generated via `collector_v2.py` using the ground-truth `engine.py`. Balanced
+Generated via `collector.py` using the ground-truth `engine.py`. Balanced
 direction data ensures the model learns turns, not just "go straight."

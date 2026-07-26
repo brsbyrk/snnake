@@ -4,7 +4,7 @@ sys.path.insert(0, "src")
 
 import torch
 import torch.nn as nn
-from snnake.model_v5 import StructuredWorldModel
+from snnake.model import StructuredWorldModel
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
