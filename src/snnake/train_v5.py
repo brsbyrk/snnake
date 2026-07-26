@@ -160,7 +160,12 @@ def train_v5(
     np.random.seed(seed)
 
     if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     device = torch.device(device)
     print(f"Using device: {device}")
 
@@ -386,6 +391,8 @@ def main():
     parser.add_argument("--test-interval", type=int, default=5)
     parser.add_argument("--test-samples", type=int, default=200)
     parser.add_argument("--ar-max-steps", type=int, default=5000)
+    parser.add_argument("--device", type=str, default="auto",
+                        help="Device: auto, cuda, mps, or cpu")
     args = parser.parse_args()
 
     train_v5(
@@ -401,6 +408,7 @@ def main():
         test_interval=args.test_interval,
         test_samples=args.test_samples,
         ar_max_steps=args.ar_max_steps,
+        device=args.device,
     )
 
 

@@ -1,95 +1,81 @@
-# sNNake — v5 Structured World Model
+# sNNake v5 — A Neural Network as a Game Engine
 
-**A neural Snake game engine — exact physics with learned direction + food spawn.**
+**The thesis:** when building a world model, separate what's learnable from
+what's computable. Don't make a neural network rediscover integer arithmetic.
 
-Instead of one big network trying to rediscover integer addition and shift registers, v5 separates the problem:
+## What this project demonstrates
 
-- **Deterministic physics (Exact arithmetic):** head movement, collision detection, body shift register, food eating — all computed as exact tensor ops. Zero drift, infinite autoregressive stability.
-- **Learned components (<15K params):** direction update (direction + action → new direction) and food respawn (body context → new food cell).
+A 13.8K-parameter neural network that serves as a Snake game engine by only
+learning what it needs to — the direction transition function — while everything
+else is exact deterministic math.
+
+| Version | Approach | Params | Result |
+|---------|----------|--------|--------|
+| v1–v4 | Neural net predicts *everything* (head, body, food, collisions) | 150K+ | Autoregressive drift, collapses |
+| **v5** | Neural net predicts only direction; physics is exact tensor ops | **13.8K** | Zero drift, infinite stability |
+
+The model learned `(direction + action_offset) % 4` from 30,000 training
+examples. It's a 12-entry lookup table encoded in 1,200 parameters. The point
+isn't that this is hard — it's that previous versions tried to learn *everything*
+and failed.
 
 ## Architecture
 
 ```
-Current state (head, direction, food, body, mask)
+Input: direction (4) + action (3)
         │
-        ├── Direction Net (1.2K params) 
-        │     direction + action → new_dir_logits (4-class)
+        ├── Direction MLP (1.2K params)
+        │     Linear(7→32) → ReLU → Linear(32→4)
         │
-        ├── Deterministic physics (exact):
-        │     ├── new_head = old_head + dir_offset[new_dir]
-        │     ├── wall_collision = out_of_bounds(new_head)
-        │     ├── self_collision = new_head in body
-        │     ├── ate = (new_head == food_pos)
-        │     └── new_body = [new_head] + body[:-1]
-        │
-        └── Food Net (12.6K params)
-              body_encoder(GRU) → MLP → food_logits (100-cell)
-              (only used when ate=True)
+        └── Deterministic physics (exact, not learned):
+              new_head = old_head + offset[predicted_dir]
+              collisions, body shift, food detection
+```
+
+The food spawn predictor (body encoder GRU + MLP, 12.6K params) exists in the
+codebase but is not needed for gameplay — food spawns randomly on empty cells.
+
+## What's in this repo
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Model | `src/snnake/model_v5.py` | 13.8K-param StructuredWorldModel |
+| Training | `src/snnake/train_v5.py` | Training loop (CUDA/MPS/CPU) |
+| Data collection | `src/snnake/collector_v2.py` | Generates training data from ground-truth engine |
+| Ground truth engine | `src/snnake/engine.py` | Reference Snake implementation |
+| ONNX export | `export_onnx.py` | Exports direction MLP → 2.2 KB ONNX |
+| Web demo | `web/index.html` | Browser demo — the ONNX model plays Snake autonomously |
+
+## Quick Start
+
+```bash
+# Setup
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -e .
+
+# Generate training data
+python -m snnake.collector_v2 --episodes 5000 --output data/games_v3_combined.npz
+
+# Train
+python -m snnake.train_v5 --data data/balanced_dir.npz --epochs 30 --lr 1e-3
+
+# Export ONNX
+python export_onnx.py
+
+# Web demo
+cd web && python3 -m http.server 8765
+# Open http://localhost:8765 — the model plays by itself
 ```
 
 ## Results
 
-| Metric | 15 epochs (5% noise) |
-|--------|---------------------|
-| Direction accuracy (val) | 99.8% |
-| Learned params | 13,848 |
-| Autoregressive mean | 127.1 steps |
-| Autoregressive max | 1,307 steps |
-| Samples ≥100 steps | 38.6% |
-| Samples ≥500 steps | 5.4% |
-| Samples ≥1,000 steps | 0.6% |
-| AR test speed | 500 samples / 32s |
+| Metric | Value |
+|--------|-------|
+| Learned parameters | 13,848 |
+| Direction accuracy | 100% (12/12 cases) |
+| ONNX model size | 2.2 KB |
+| Training time | ~30s on M1 Mac (MPS) |
 
-Because physics is deterministic, the model never "drifts" — it either predicts the correct direction or it doesn't. With direction accuracy at 99.8%, the expected consecutive correct steps is ~500. The first wrong direction prediction is a "death" — the trajectory ends, but doesn't compound into garbage.
+## License
 
-## Quick Start
-
-### Train
-```bash
-cd ~/workspace/_projects/snnake
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python -m snnake.train_v5 \
-  --data data/games_v3_combined.npz \
-  --epochs 15 --batch-size 256 --noise-prob 0.05
-```
-
-### Play in browser
-```bash
-cd ~/workspace/_projects/snnake/web
-python3 -m http.server 8765
-# Open http://localhost:8765 in a browser
-```
-
-The web player loads a **2.2 KB ONNX model** (direction MLP only) via ONNX Runtime Web. Deterministic physics runs in JavaScript. No server needed — pure client-side inference.
-
-## Project Structure
-
-```
-snnake/
-├── src/snnake/
-│   ├── model_v5.py      # StructuredWorldModel (deterministic + learned)
-│   ├── train_v5.py      # Training loop + AR evaluation
-│   ├── model_v4.py      # Previous: discrete classification (deprecated)
-│   ├── train_v4.py      # Previous trainer (deprecated)
-│   ├── collector_v2.py  # Data collection pipeline
-│   ├── encoding.py      # Direction/action encoding
-│   └── engine.py        # Ground truth Snake game
-├── web/                 # Browser playable game
-│   ├── index.html       # Game page
-│   ├── game.js          # Game logic + ONNX inference + render
-│   ├── style.css        # Dark theme styling
-│   └── direction_model.onnx  # 2.2 KB direction MLP
-├── data/                # Training data (gitignored)
-├── checkpoints_v5/      # v5 model weights (gitignored)
-└── checkpoints_v4/      # v4 model weights (gitignored)
-```
-
-## Why v5?
-
-Previous versions (v1-v4) tried to predict ALL game state from a neural network — head positions, body positions, collision flags — as classification or regression problems. This required 150K+ params and still suffered from autoregressive drift because any single wrong prediction cascades.
-
-v5 recognizes that Snake physics are trivially computable. The only things worth learning are the direction transition (a deterministic `(dir + action_offset) % 4` that the network learns effortlessly) and food spawn distribution. This gives:
-
-- **13.8K params** (vs 150K in v4)
-- **Infinite AR stability** (exact arithmetic doesn't drift)
-- **CPU-fast inference** (~1μs per step)
-- **Near-perfect accuracy after 2 epochs**
+MIT

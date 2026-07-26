@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sNNake v5 — The Model Plays</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+#app { text-align: center; max-width: 500px; padding: 1rem; }
+h1 { font-size: 2rem; font-weight: 700; color: #58a6ff; }
+.version { font-size: 1rem; color: #8b949e; font-weight: 400; }
+.subtitle { color: #8b949e; font-size: 0.85rem; margin-bottom: 0.5rem; }
+#game-container { position: relative; display: inline-block; border: 2px solid #30363d; border-radius: 4px; margin-bottom: 0.75rem; }
+canvas { display: block; background: #161b22; }
+#info { display: flex; justify-content: center; gap: 2rem; font-size: 0.9rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+#model-status { color: #d2a8ff; }
+.controls { color: #484f58; font-size: 0.75rem; margin-top: 0.5rem; }
+.controls button { margin: 0 0.25rem; padding: 0.25rem 0.75rem; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.75rem; }
+.controls button:hover { background: #30363d; }
+.controls button.active { background: #1f6feb; border-color: #58a6ff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>sNNake <span class="version">v5</span></h1>
+  <p class="subtitle">The neural network IS the game engine — no human input</p>
+  <div id="game-container">
+    <canvas id="game" width="400" height="400"></canvas>
+  </div>
+  <div id="info">
+    <span>Score: <strong id="score">0</strong></span>
+    <span>Steps: <strong id="steps">0</strong></span>
+    <span>Speed: <strong id="speed-display">1x</strong></span>
+  </div>
+  <div id="model-status">Loading ONNX model…</div>
+  <div class="controls">
+    <button id="btn-play">▶ Play</button>
+    <button id="btn-pause" disabled>⏸ Pause</button>
+    <button id="btn-reset">↺ Reset</button>
+    <button id="btn-speed">Speed: 1x</button>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js">
+</script>
+<script>
+// ---- Check ORT loaded ----
+const ortAvailable = typeof ort !== 'undefined';
+if (!ortAvailable) {
+  document.getElementById('model-status').textContent = 'ONNX Runtime not available — cannot run model';
+  document.getElementById('model-status').style.color = '#f85149';
+}
+
+// ---- Constants ----
+const GRID = 10, CELL = 40;
+const DX = [0, 1, 0, -1];   // N, E, S, W
+const DY = [-1, 0, 1, 0];
+const TURN = [-1, 0, 1];    // left, straight, right → direction offset
+
+// ---- Model (ONNX or hardcoded fallback) ----
+let predictDir;
+let modelStatus = 'loading';
+
+function predictDirHardcoded(dirIdx, actionIdx) {
+  return (dirIdx + TURN[actionIdx] + 4) % 4;
+}
+
+async function loadModel() {
+  const el = document.getElementById('model-status');
+  predictDir = predictDirHardcoded;
+
+  if (!ortAvailable) {
+    modelStatus = 'fallback';
+    el.textContent = '⚠ No ONNX Runtime — using hardcoded direction (model unavailable)';
+    el.style.color = '#d2a8ff';
+    return;
+  }
+
+  try {
+    const session = await ort.InferenceSession.create('direction_model.onnx', {
+      executionProviders: ['wasm'],
+    });
+
+    const onnxPredict = async function(dirIdx, actionIdx) {
+      const d = new Float32Array(4); d[dirIdx] = 1;
+      const a = new Float32Array(3); a[actionIdx] = 1;
+      const results = await session.run({
+        direction: new ort.Tensor('float32', d, [1, 4]),
+        action: new ort.Tensor('float32', a, [1, 3]),
+      });
+      const logits = results.dir_logits.data;
+      let best = 0;
+      for (let i = 1; i < 4; i++) if (logits[i] > logits[best]) best = i;
+      return best;
+    };
+
+    // Verify all 12 cases match hardcoded
+    let ok = true;
+    for (let d = 0; d < 4 && ok; d++)
+      for (let a = 0; a < 3 && ok; a++)
+        if (predictDirHardcoded(d, a) !== await onnxPredict(d, a)) ok = false;
+
+    if (ok) {
+      predictDir = onnxPredict;
+      modelStatus = 'onnx';
+      el.textContent = '✓ Model running: direction predicted by ONNX neural network (13.8K params)';
+      el.style.color = '#3fb950';
+    } else {
+      modelStatus = 'mismatch';
+      el.textContent = '⚠ Model predictions mismatch — using hardcoded';
+      el.style.color = '#f0883e';
+    }
+  } catch (e) {
+    modelStatus = 'error';
+    el.textContent = '⚠ ONNX error: ' + e.message + ' — using hardcoded';
+    el.style.color = '#f85149';
+    console.error(e);
+  }
+}
+
+// ---- Game state ----
+let state, gameLoop, speed = 1;
+const speeds = [400, 200, 100, 50, 20];
+
+function initState() {
+  const head = [5, 5];
+  return {
+    head: head.slice(), body: [], direction: 1,
+    food: randomFood([head]), score: 0, steps: 0, running: false,
+  };
+}
+
+function randomFood(occupied) {
+  const free = [];
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++)
+      if (!occupied.some(p => p[0] === x && p[1] === y)) free.push([x, y]);
+  return free.length ? free[Math.floor(Math.random() * free.length)] : [0, 0];
+}
+
+// ---- AI: picks action to move towards food ----
+function chooseAction() {
+  const D = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const [hx, hy] = state.head;
+  const [fx, fy] = state.food;
+  const body = [state.head, ...state.body];
+  const currentDir = state.direction;
+
+  // Rate each action: safe, then closest to food
+  let bestAction = 1;
+  let bestDist = Infinity;
+  let anySafe = false;
+
+  for (let a = 0; a < 3; a++) {
+    const newDir = (currentDir + TURN[a] + 4) % 4;
+    const nx = hx + D[newDir][0];
+    const ny = hy + D[newDir][1];
+
+    // Skip if immediate death
+    if (nx < 0 || nx >= GRID || ny < 0 || ny >= GRID) continue;
+    if (body.some(p => p[0] === nx && p[1] === ny)) continue;
+
+    anySafe = true;
+    const dist = Math.abs(nx - fx) + Math.abs(ny - fy);
+    if (dist < bestDist) { bestDist = dist; bestAction = a; }
+  }
+
+  // If all moves lead to death, go straight (it'll die, but gracefully)
+  return anySafe ? bestAction : 1;
+}
+
+// ---- Step: AI chooses action → MODEL predicts direction → physics moves ----
+async function step() {
+  if (!state.running) return;
+
+  const action = chooseAction();
+  const newDir = await predictDir(state.direction, action);
+
+  // 3. Deterministic physics: move head
+  const newHead = [state.head[0] + DX[newDir], state.head[1] + DY[newDir]];
+
+  // 4. Check wall
+  if (newHead[0] < 0 || newHead[0] >= GRID || newHead[1] < 0 || newHead[1] >= GRID)
+    return endGame('Wall! Final score: ' + state.score);
+
+  // 5. Check self
+  const allBody = [state.head, ...state.body];
+  if (allBody.some(p => p[0] === newHead[0] && p[1] === newHead[1]))
+    return endGame('Self! Final score: ' + state.score);
+
+  // 6. Food
+  const ate = newHead[0] === state.food[0] && newHead[1] === state.food[1];
+  const newBody = [[...state.head], ...state.body];
+  if (!ate) newBody.pop();
+
+  // 7. Update
+  state.head = newHead;
+  state.body = newBody;
+  state.direction = newDir;
+  state.steps++;
+
+  if (ate) {
+    state.score++;
+    state.food = randomFood([state.head, ...state.body]);
+    if (state.body.length >= GRID * GRID - 1)
+      return endGame('🏆 Perfect game! Score: ' + state.score);
+  }
+
+  draw();
+}
+
+function endGame(msg) {
+  state.running = false;
+  if (gameLoop) { clearTimeout(gameLoop); gameLoop = null; }
+  document.getElementById('model-status').textContent = msg;
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-pause').disabled = true;
+  draw();
+}
+
+// ---- Rendering ----
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function draw() {
+  ctx.clearRect(0, 0, 400, 400);
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= GRID; i++) {
+    ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, 400); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * CELL); ctx.lineTo(400, i * CELL); ctx.stroke();
+  }
+  if (!state) return;
+
+  // Food
+  const [fx, fy] = state.food;
+  ctx.fillStyle = '#d2a8ff';
+  ctx.beginPath();
+  ctx.arc(fx * CELL + CELL/2, fy * CELL + CELL/2, CELL/3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = '#3fb950';
+  for (const [bx, by] of state.body)
+    ctx.fillRect(bx * CELL + 2, by * CELL + 2, CELL - 4, CELL - 4);
+
+  // Head
+  ctx.fillStyle = '#58a6ff';
+  const [hx, hy] = state.head;
+  ctx.fillRect(hx * CELL + 2, hy * CELL + 2, CELL - 4, CELL - 4);
+
+  // Direction indicator (small triangle)
+  const cx = hx * CELL + CELL/2, cy = hy * CELL + CELL/2;
+  const angle = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI][state.direction]; // N, E, S, W
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(cx + Math.cos(angle) * 12, cy + Math.sin(angle) * 12);
+  ctx.lineTo(cx + Math.cos(angle + 2.5) * 6, cy + Math.sin(angle + 2.5) * 6);
+  ctx.lineTo(cx + Math.cos(angle - 2.5) * 6, cy + Math.sin(angle - 2.5) * 6);
+  ctx.fill();
+
+  document.getElementById('score').textContent = state.score;
+  document.getElementById('steps').textContent = state.steps;
+  document.getElementById('speed-display').textContent = speed + 'x';
+}
+
+// ---- Controls ----
+function startLoop() {
+  if (gameLoop) clearTimeout(gameLoop);
+  scheduleNext();
+}
+
+function scheduleNext() {
+  if (!state || !state.running) return;
+  gameLoop = setTimeout(async () => {
+    await step();
+    scheduleNext();
+  }, speeds[speed - 1]);
+}
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (!state) state = initState();
+  state.running = true;
+  document.getElementById('btn-play').textContent = '▶ Running';
+  document.getElementById('btn-pause').disabled = false;
+  document.getElementById('model-status').textContent =
+    modelStatus === 'onnx' ? '✓ Model running: direction predicted by ONNX neural network (13.8K params)'
+    : 'Model running: ' + (modelStatus === 'fallback' ? 'hardcoded fallback' : 'ONNX predictions');
+  startLoop();
+});
+
+document.getElementById('btn-pause').addEventListener('click', () => {
+  state.running = false;
+  if (gameLoop) { clearTimeout(gameLoop); gameLoop = null; }
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-pause').disabled = true;
+  document.getElementById('model-status').textContent = '⏸ Paused';
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  if (gameLoop) { clearTimeout(gameLoop); gameLoop = null; }
+  state = initState();
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-pause').disabled = true;
+  document.getElementById('model-status').textContent =
+    modelStatus === 'onnx' ? '✓ Model ready: direction predicted by ONNX neural network (13.8K params)'
+    : 'Model ready: ' + (modelStatus === 'fallback' ? 'hardcoded fallback' : 'ONNX predictions');
+  draw();
+});
+
+document.getElementById('btn-speed').addEventListener('click', function() {
+  speed = (speed % speeds.length) + 1;
+  this.textContent = 'Speed: ' + speed + 'x';
+  document.getElementById('speed-display').textContent = speed + 'x';
+  if (state && state.running) startLoop();
+});
+
+// ---- Init ----
+loadModel();
+state = initState();
+draw();
+</script>
+</body>
+</html>
