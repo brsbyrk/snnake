@@ -1,4 +1,4 @@
-# sNNake v5 — A Neural Network as a Game Engine
+# sNNake — A Neural Network as a Game Engine
 
 **The thesis:** when building a world model, separate what's learnable from
 what's computable. Don't make a neural network rediscover integer arithmetic.
@@ -9,15 +9,10 @@ A 13.8K-parameter neural network that serves as a Snake game engine by only
 learning what it needs to — the direction transition function — while everything
 else is exact deterministic math.
 
-| Version | Approach | Params | Result |
-|---------|----------|--------|--------|
-| v1–v4 | Neural net predicts *everything* (head, body, food, collisions) | 150K+ | Autoregressive drift, collapses |
-| **v5** | Neural net predicts only direction; physics is exact tensor ops | **13.8K** | Zero drift, infinite stability |
-
 The model learned `(direction + action_offset) % 4` from 30,000 training
 examples. It's a 12-entry lookup table encoded in 1,200 parameters. The point
-isn't that this is hard — it's that previous versions tried to learn *everything*
-and failed.
+isn't that this is hard — it's that doing the obvious thing (predicting
+everything with a neural net) takes 150K+ params and still drifts.
 
 ## Architecture
 
@@ -44,7 +39,7 @@ codebase but is not needed for gameplay — food spawns randomly on empty cells.
 | Data collection | `src/snnake/collector.py` | Generates training data from ground-truth engine |
 | Ground truth engine | `src/snnake/engine.py` | Reference Snake implementation |
 | ONNX export | `export_onnx.py` | Exports direction MLP → 2.2 KB ONNX |
-| Web demo | `web/index.html` | Browser demo — the ONNX model plays Snake autonomously |
+| Web demo | `web/index.html` | The ONNX model plays Snake autonomously in the browser |
 
 ## Quick Start
 

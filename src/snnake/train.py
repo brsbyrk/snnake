@@ -23,7 +23,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from .model import StructuredWorldModel, compute_v5_loss
+from .model import StructuredWorldModel, compute_loss
 from .collector import load_data_v2
 
 GRID_SIZE = 10
@@ -241,7 +241,7 @@ def train_v5(
             )
 
             # Loss
-            loss_dict = compute_v5_loss(
+            loss_dict = compute_loss(
                 dir_logits, food_logits, pred_head, pred_body, pred_mask, pred_ate, pred_go,
                 batch["next_direction"].float(), batch["next_food"],
                 batch["next_head"], batch["next_body"],
@@ -289,7 +289,7 @@ def train_v5(
                     batch["body_mask"].float(),
                 )
 
-                loss_dict = compute_v5_loss(
+                loss_dict = compute_loss(
                     dir_logits, food_logits, pred_head, pred_body, pred_mask, pred_ate, pred_go,
                     batch["next_direction"].float(), batch["next_food"],
                     batch["next_head"], batch["next_body"],

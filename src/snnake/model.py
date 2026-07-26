@@ -329,7 +329,7 @@ class StructuredWorldModel(nn.Module):
         return dir_logits, new_head, new_body, new_body_mask, ate, game_over
 
 
-def compute_v5_loss(
+def compute_loss(
     dir_logits: torch.Tensor,
     food_logits: torch.Tensor,
     new_head: torch.Tensor,

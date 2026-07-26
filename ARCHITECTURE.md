@@ -1,4 +1,4 @@
-# sNNake v5 Architecture
+# sNNake Architecture
 
 ## Design Philosophy
 
@@ -41,12 +41,12 @@ Food prediction (not used in web demo):
 
 ### 1. Deterministic physics, learned direction
 
-Previous versions (v1–v4) tried to predict ALL game state from a neural network —
+The naive approach is to predict ALL game state from a neural network —
 head positions, body positions, collision flags — as classification or regression
-problems. This required 150K+ params and still suffered from autoregressive drift.
+problems. This requires 150K+ params and suffers from autoregressive drift.
 
-v5 recognizes that physics are trivially computable. The direction network
-learns `(dir + offset) % 4` from data, but the mapping is so simple that
+This project recognizes that physics are trivially computable. The direction
+network learns `(dir + offset) % 4` from data, but the mapping is so simple that
 accurate learning requires balanced training data (equal representation of all
 12 direction-action pairs).
 
